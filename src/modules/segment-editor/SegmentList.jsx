@@ -65,7 +65,7 @@ export default function SegmentList() {
             speakerConfig: {
                 mode: type === 'dialogue' ? 'multi' : 'single',
                 voices: type === 'dialogue'
-                    ? { W: defaultVoices.female, M: defaultVoices.male }
+                    ? { Sarah: defaultVoices.female, James: defaultVoices.male }
                     : { narrator: defaultVoices.narrator },
             },
             repeat: 1,

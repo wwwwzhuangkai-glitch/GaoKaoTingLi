@@ -7,7 +7,7 @@ import Timeline from './modules/timeline/Timeline';
 import SettingsPanel from './modules/settings/SettingsPanel';
 import VoicePreview from './modules/voice-preview/VoicePreview';
 import { generateSingle, generateMulti } from './modules/tts-engine/ttsClient';
-import { generateDing } from './modules/audio-library/builtinSounds';
+import { loadRealDing } from './modules/audio-library/builtinSounds';
 import { makeSilence } from './modules/audio-engine/pcmUtils';
 import './App.css';
 
@@ -58,7 +58,7 @@ export default function App() {
       let audioData;
 
       if (segment.type === 'ding') {
-        audioData = generateDing(880, 0.5, 0.4);
+        audioData = await loadRealDing();
       } else if (segment.type === 'silence') {
         audioData = makeSilence(segment.gapAfter || 5);
       } else if (segment.speakerConfig?.mode === 'multi') {

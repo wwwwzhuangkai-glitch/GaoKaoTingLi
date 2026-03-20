@@ -63,4 +63,23 @@ export function resample(buffer, fromRate, toRate = SAMPLE_RATE) {
     return result;
 }
 
+/**
+ * Change playback speed of audio buffer (like ffmpeg atempo).
+ * speed=0.9 means 90% speed (slower), speed=1.1 means 110% speed (faster).
+ * Uses linear interpolation to stretch/compress samples.
+ */
+export function changeSpeed(buffer, speed) {
+    if (speed === 1.0) return buffer;
+    const newLen = Math.floor(buffer.length / speed);
+    const result = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) {
+        const srcIdx = i * speed;
+        const lo = Math.floor(srcIdx);
+        const hi = Math.min(lo + 1, buffer.length - 1);
+        const frac = srcIdx - lo;
+        result[i] = buffer[lo] * (1 - frac) + buffer[hi] * frac;
+    }
+    return result;
+}
+
 export { SAMPLE_RATE };

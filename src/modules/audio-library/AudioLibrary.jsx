@@ -1,8 +1,7 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import useAppStore from '../../store/appStore';
-import { getBuiltinSounds } from './builtinSounds';
-import { playFloat32 } from '../audio-engine/audioContext';
-import { decodeAudioFile } from '../audio-engine/audioContext';
+import { getBuiltinSounds, loadRealDing } from './builtinSounds';
+import { playFloat32, decodeAudioFile } from '../audio-engine/audioContext';
 import { getDuration } from '../audio-engine/pcmUtils';
 import './AudioLibrary.css';
 
@@ -10,6 +9,18 @@ export default function AudioLibrary() {
     const { userSounds, addUserSound, removeUserSound, addToast } = useAppStore();
     const fileInputRef = useRef(null);
     const builtinSounds = getBuiltinSounds();
+    const [realDingData, setRealDingData] = useState(null);
+    const [loadingDing, setLoadingDing] = useState(true);
+
+    // Load real ding async on mount
+    useEffect(() => {
+        loadRealDing()
+            .then((data) => {
+                setRealDingData(data);
+                setLoadingDing(false);
+            })
+            .catch(() => setLoadingDing(false));
+    }, []);
 
     const handleUpload = useCallback(async (e) => {
         const file = e.target.files[0];
@@ -34,7 +45,26 @@ export default function AudioLibrary() {
     }, [addUserSound, addToast]);
 
     const handlePlaySound = (sound) => {
-        playFloat32(sound.data);
+        // For async sounds (real ding), use loaded data
+        if (sound.isAsync) {
+            if (realDingData) {
+                playFloat32(realDingData);
+            } else {
+                addToast({ type: 'info', message: '叮声正在加载中...' });
+            }
+            return;
+        }
+        if (sound.data) {
+            playFloat32(sound.data);
+        }
+    };
+
+    // Compute actual duration for display
+    const getSoundDuration = (sound) => {
+        if (sound.isAsync && realDingData) {
+            return getDuration(realDingData).toFixed(1);
+        }
+        return sound.duration.toFixed(1);
     };
 
     return (
@@ -50,8 +80,17 @@ export default function AudioLibrary() {
                     <div key={sound.id} className="audio-library__item">
                         <span className="audio-library__item-icon">🔔</span>
                         <span className="audio-library__item-name truncate">{sound.name}</span>
-                        <span className="audio-library__item-duration">{sound.duration.toFixed(1)}s</span>
-                        <button className="btn-icon" onClick={() => handlePlaySound(sound)} title="播放">▶</button>
+                        <span className="audio-library__item-duration">
+                            {getSoundDuration(sound)}s
+                        </span>
+                        <button
+                            className="btn-icon"
+                            onClick={() => handlePlaySound(sound)}
+                            title="播放"
+                            disabled={sound.isAsync && loadingDing}
+                        >
+                            {sound.isAsync && loadingDing ? '⏳' : '▶'}
+                        </button>
                     </div>
                 ))}
             </div>

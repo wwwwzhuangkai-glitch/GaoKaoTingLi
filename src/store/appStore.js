@@ -8,7 +8,7 @@ const useAppStore = create(
       apiKey: '',
       setApiKey: (key) => set({ apiKey: key }),
       defaultVoices: {
-        narrator: 'Zephyr',
+        narrator: 'Orus',
         female: 'Zephyr',
         male: 'Charon',
       },
@@ -87,12 +87,27 @@ const useAppStore = create(
     }),
     {
       name: 'gaokaotingli_settings',
+      version: 2, // bump to force migration
       partialize: (state) => ({
         apiKey: state.apiKey,
         defaultVoices: state.defaultVoices,
         darkMode: state.darkMode,
         ttsModel: state.ttsModel,
       }),
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          // Reset defaultVoices to correct defaults
+          return {
+            ...persisted,
+            defaultVoices: {
+              narrator: 'Orus',
+              female: 'Zephyr',
+              male: 'Charon',
+            },
+          };
+        }
+        return persisted;
+      },
     }
   )
 );

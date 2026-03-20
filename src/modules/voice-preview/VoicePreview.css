@@ -78,3 +78,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+.voice-preview__hint {
+    font-size: var(--text-sm);
+    color: var(--color-on-surface-tertiary);
+    background: var(--color-surface-dim);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-4);
+}
+
+.voice-preview__card--playing {
+    border-color: var(--color-primary);
+    background: var(--color-primary-light);
+}

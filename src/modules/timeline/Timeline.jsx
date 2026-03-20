@@ -1,8 +1,8 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from 'react';
 import useAppStore from '../../store/appStore';
 import { playFloat32 } from '../audio-engine/audioContext';
-import { concatenate, repeat as repeatBuf, makeSilence, getDuration } from '../audio-engine/pcmUtils';
-import { generateDing, getBuiltinSounds } from '../audio-library/builtinSounds';
+import { concatenate, makeSilence, getDuration, changeSpeed } from '../audio-engine/pcmUtils';
+import { loadRealDing, generateDing } from '../audio-library/builtinSounds';
 import { encodeWav, downloadWav } from '../audio-engine/wavEncoder';
 import './Timeline.css';
 
@@ -14,17 +14,38 @@ const TYPE_COLORS = {
     silence: '#E8EAED',
 };
 
+/** Speed presets for multi-speed export */
+const SPEED_PRESETS = [
+    { label: '1.0x (原速)', value: 1.0 },
+    { label: '0.95x (稍慢)', value: 0.95 },
+    { label: '0.9x (慢速)', value: 0.9 },
+];
+
 export default function Timeline() {
     const { segments, audioBuffers, addToast } = useAppStore();
     const [zoom, setZoom] = useState(50);    // pixels per second
     const [isPlaying, setIsPlaying] = useState(false);
     const [playProgress, setPlayProgress] = useState(0);
+    const [isExporting, setIsExporting] = useState(false);
+    const [dingBuffer, setDingBuffer] = useState(null);
     const playControllerRef = useRef(null);
     const animFrameRef = useRef(null);
     const playStartRef = useRef(0);
     const scrollRef = useRef(null);
 
-    // Build merged audio data for exported timeline
+    // Load real ding on mount
+    useEffect(() => {
+        loadRealDing().then(buf => setDingBuffer(buf));
+    }, []);
+
+    // Get the ding audio buffer (real or wait for it)
+    const getDingAudio = useCallback(() => {
+        if (dingBuffer) return dingBuffer;
+        // Fallback: generate synthetic ding if real ding hasn't loaded yet
+        return generateDing(880, 0.5, 0.4);
+    }, [dingBuffer]);
+
+    // Build merged audio data for timeline visualization
     const timelineData = useMemo(() => {
         const clips = [];
         let offset = 0;
@@ -34,9 +55,8 @@ export default function Timeline() {
             let hasAudio = false;
 
             if (seg.type === 'ding') {
-                const dingData = generateDing(880, 0.5, 0.4);
-                duration = getDuration(dingData);
-                hasAudio = true;
+                duration = dingBuffer ? getDuration(dingBuffer) : 1.5;
+                hasAudio = !!dingBuffer;
             } else if (seg.type === 'silence') {
                 duration = seg.gapAfter || 5;
             } else if (audioBuffers[seg.id]) {
@@ -44,8 +64,8 @@ export default function Timeline() {
                 const baseDuration = getDuration(buf);
                 duration = baseDuration * (seg.repeat || 1);
                 if (seg.repeat > 1) {
-                    // Add small gaps between repeats
-                    duration += (seg.repeat - 1) * 1;
+                    // Add 2s gap between repeats (standard exam gap)
+                    duration += (seg.repeat - 1) * 2;
                 }
                 hasAudio = true;
             } else {
@@ -68,25 +88,40 @@ export default function Timeline() {
         }
 
         return { clips, totalDuration: offset };
-    }, [segments, audioBuffers]);
+    }, [segments, audioBuffers, dingBuffer]);
 
-    // Build full audio buffer for playback/export
-    const buildFullAudio = useCallback(() => {
+    /**
+     * Build full audio buffer for playback/export.
+     * For dialogue/monologue segments, optionally apply speed change.
+     * Ding, silence, and narrator keep original speed per the report strategy.
+     *
+     * @param {number} speed - playback speed (1.0 = original, 0.9 = slower)
+     */
+    const buildFullAudio = useCallback((speed = 1.0) => {
         const parts = [];
+        const ding = getDingAudio();
 
         for (const seg of segments) {
             let segAudio;
 
             if (seg.type === 'ding') {
-                segAudio = generateDing(880, 0.5, 0.4);
+                segAudio = ding;
             } else if (seg.type === 'silence') {
                 segAudio = makeSilence(seg.gapAfter || 5);
             } else if (audioBuffers[seg.id]) {
                 segAudio = audioBuffers[seg.id];
+
+                // Apply speed change only to English content (dialogue/monologue)
+                // Chinese narrator stays at original speed per the report
+                if (speed !== 1.0 && (seg.type === 'dialogue' || seg.type === 'monologue')) {
+                    segAudio = changeSpeed(segAudio, speed);
+                }
+
+                // Handle repeats: reuse same audio buffer (1 API call, N repeats)
                 if (seg.repeat > 1) {
                     const repeated = [];
                     for (let i = 0; i < seg.repeat; i++) {
-                        if (i > 0) repeated.push(makeSilence(1));
+                        if (i > 0) repeated.push(makeSilence(2)); // 2s gap between repeats
                         repeated.push(segAudio);
                     }
                     segAudio = concatenate(repeated);
@@ -106,10 +141,10 @@ export default function Timeline() {
 
         if (parts.length === 0) return null;
         return concatenate(parts);
-    }, [segments, audioBuffers]);
+    }, [segments, audioBuffers, getDingAudio]);
 
     const handlePlay = useCallback(() => {
-        const fullAudio = buildFullAudio();
+        const fullAudio = buildFullAudio(1.0);
         if (!fullAudio) {
             addToast({ type: 'error', message: '没有可播放的音频，请先生成' });
             return;
@@ -148,15 +183,48 @@ export default function Timeline() {
         setPlayProgress(0);
     }, []);
 
-    const handleExport = useCallback(() => {
-        const fullAudio = buildFullAudio();
+    /** Export a single speed version */
+    const handleExportSingle = useCallback((speed = 1.0) => {
+        const fullAudio = buildFullAudio(speed);
         if (!fullAudio) {
             addToast({ type: 'error', message: '没有可导出的音频' });
             return;
         }
         const blob = encodeWav(fullAudio);
-        downloadWav(blob, `gaokao_listening_${Date.now()}.wav`);
-        addToast({ type: 'success', message: '导出成功！' });
+        const speedLabel = speed === 1.0 ? '1.0x' : `${speed}x`;
+        downloadWav(blob, `gaokao_listening_${speedLabel}_${Date.now()}.wav`);
+        addToast({ type: 'success', message: `导出 ${speedLabel} 版本成功！` });
+    }, [buildFullAudio, addToast]);
+
+    /** Export all 3 speed versions at once */
+    const handleExportAll = useCallback(async () => {
+        const checkAudio = buildFullAudio(1.0);
+        if (!checkAudio) {
+            addToast({ type: 'error', message: '没有可导出的音频' });
+            return;
+        }
+
+        setIsExporting(true);
+        const timestamp = Date.now();
+
+        try {
+            for (const preset of SPEED_PRESETS) {
+                // Small delay to let browser breathe between heavy computations
+                await new Promise(r => setTimeout(r, 100));
+
+                const fullAudio = buildFullAudio(preset.value);
+                if (fullAudio) {
+                    const blob = encodeWav(fullAudio);
+                    const speedLabel = preset.value === 1.0 ? '1.0x' : `${preset.value}x`;
+                    downloadWav(blob, `gaokao_listening_${speedLabel}_${timestamp}.wav`);
+                }
+            }
+            addToast({ type: 'success', message: '三个倍速版本全部导出成功！' });
+        } catch (err) {
+            addToast({ type: 'error', message: `导出失败: ${err.message}` });
+        } finally {
+            setIsExporting(false);
+        }
     }, [buildFullAudio, addToast]);
 
     const formatTime = (seconds) => {
@@ -210,9 +278,32 @@ export default function Timeline() {
                     />
                 </div>
 
-                <button className="btn btn-primary btn-sm" onClick={handleExport}>
-                    📥 导出 WAV
-                </button>
+                <div className="timeline__export-group">
+                    {/* Single-speed exports */}
+                    {SPEED_PRESETS.map((preset) => (
+                        <button
+                            key={preset.value}
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleExportSingle(preset.value)}
+                            disabled={isExporting}
+                            title={`导出 ${preset.label}`}
+                        >
+                            📥 {preset.label}
+                        </button>
+                    ))}
+                    {/* Export all 3 at once */}
+                    <button
+                        className="btn btn-primary btn-sm"
+                        onClick={handleExportAll}
+                        disabled={isExporting}
+                    >
+                        {isExporting ? (
+                            <><span className="spinner" /> 导出中...</>
+                        ) : (
+                            '📦 导出全部倍速'
+                        )}
+                    </button>
+                </div>
             </div>
 
             {/* Timeline body */}

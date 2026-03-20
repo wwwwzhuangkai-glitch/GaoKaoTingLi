@@ -2,6 +2,7 @@ import { useState } from 'react';
 import useAppStore from '../../store/appStore';
 import { VOICES } from '../voice-preview/voiceList';
 import { playFloat32 } from '../audio-engine/audioContext';
+import { encodeWav, downloadWav } from '../audio-engine/wavEncoder';
 import './SegmentCard.css';
 
 const TYPE_CONFIG = {
@@ -66,6 +67,14 @@ export default function SegmentCard({ segment, index, dragHandleProps }) {
         }
     };
 
+    const handleDownload = () => {
+        const buffer = audioBuffers[segment.id];
+        if (!buffer) return;
+        const blob = encodeWav(buffer);
+        const label = segment.type === 'ding' ? 'ding' : (segment.text || '').substring(0, 20).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
+        downloadWav(blob, `seg${String(index + 1).padStart(2, '0')}_${label}.wav`);
+    };
+
     return (
         <div className={`segment-card card ${status === 'generating' ? 'segment-card--generating' : ''}`}>
             <div className="segment-card__header">
@@ -84,18 +93,27 @@ export default function SegmentCard({ segment, index, dragHandleProps }) {
                 <div className={`status-dot status-dot-${status}`} title={status} />
 
                 {hasAudio && (
-                    playbackController ? (
-                        <button className="btn-icon" onClick={handleStopPlay} title="停止">⏹</button>
-                    ) : (
-                        <button className="btn-icon" onClick={handlePlay} title="试听">▶</button>
-                    )
+                    <>
+                        {playbackController ? (
+                            <button className="btn-icon" onClick={handleStopPlay} title="停止">⏹</button>
+                        ) : (
+                            <button className="btn-icon" onClick={handlePlay} title="试听">▶</button>
+                        )}
+                        <button className="btn-icon" onClick={handleDownload} title="下载此段音频">💾</button>
+                    </>
                 )}
 
                 <button className="btn-icon" onClick={() => removeSegment(segment.id)} title="删除">✕</button>
             </div>
 
-            {/* Text content */}
-            {(segment.type !== 'ding' && segment.type !== 'silence') && (
+            {/* Text content or ding label */}
+            {segment.type === 'ding' ? (
+                <div className="segment-card__body">
+                    <div className="segment-card__text" style={{ cursor: 'default', color: 'var(--color-on-surface-tertiary)' }}>
+                        🔔 真题叮声 (ding.mp3)
+                    </div>
+                </div>
+            ) : segment.type !== 'silence' && (
                 <div className="segment-card__body">
                     {isEditing ? (
                         <div className="segment-card__edit">

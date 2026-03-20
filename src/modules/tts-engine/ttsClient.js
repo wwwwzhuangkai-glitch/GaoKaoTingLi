@@ -1,11 +1,31 @@
 /**
  * Gemini TTS API client.
  * Wraps @google/genai for single-speaker and multi-speaker generation.
+ *
+ * Adaptive strategy:
+ *  - Auto-detects whether to use single or multi speaker mode
+ *  - Handles edge cases (short text, 1-speaker dialogue fallback)
+ *  - Exponential backoff retry for API resilience
  */
 import { GoogleGenAI } from '@google/genai';
 import { buildPrompt } from './ttsPrompts';
 
 const SAMPLE_RATE = 24000;
+
+/**
+ * Use Vite dev server proxy to bypass region restrictions.
+ * Browser → localhost/gemini-api → Vite server (Node.js) → Google API
+ */
+function getProxyBaseUrl() {
+    return `${window.location.origin}/gemini-api`;
+}
+
+function createClient(apiKey) {
+    return new GoogleGenAI({
+        apiKey,
+        httpOptions: { baseUrl: getProxyBaseUrl() },
+    });
+}
 
 /**
  * Convert base64 PCM bytes to Float32Array.
@@ -18,18 +38,6 @@ function pcmBytesToFloat32(base64Data) {
     }
     // 16-bit signed PCM → Float32
     const int16 = new Int16Array(bytes.buffer);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768;
-    }
-    return float32;
-}
-
-/**
- * Raw bytes (ArrayBuffer) PCM to Float32Array.
- */
-function rawPcmToFloat32(rawData) {
-    const int16 = new Int16Array(rawData);
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
         float32[i] = int16[i] / 32768;
@@ -61,7 +69,7 @@ async function withRetry(fn, retries = 3) {
  * @returns Float32Array of audio samples at 24kHz
  */
 export async function generateSingle(apiKey, text, voiceName = 'Zephyr', model = 'gemini-2.5-flash-preview-tts', segmentType = 'narrator') {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = createClient(apiKey);
     const prompt = buildPrompt(segmentType, text);
 
     return withRetry(async () => {
@@ -86,18 +94,51 @@ export async function generateSingle(apiKey, text, voiceName = 'Zephyr', model =
 
 /**
  * Generate multi-speaker (dialogue) audio.
- * @param speakers - { speakerName: voiceName } mapping (max 2)
+ *
+ * ADAPTIVE LOGIC:
+ *  - 0 speakers detected → fallback to single speaker
+ *  - 1 speaker detected → fallback to single speaker with that voice
+ *  - 2 speakers         → normal multi_speaker call
+ *  - >2 speakers        → keep first 2, remap others
+ *
+ * @param speakers - { speakerName: voiceName } mapping
  * @returns Float32Array of audio samples at 24kHz
  */
 export async function generateMulti(apiKey, text, speakers, model = 'gemini-2.5-flash-preview-tts') {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = createClient(apiKey);
     const speakerEntries = Object.entries(speakers);
 
-    if (speakerEntries.length < 1 || speakerEntries.length > 2) {
-        throw new Error(`Multi-speaker requires exactly 2 speakers, got ${speakerEntries.length}`);
+    // ── Adaptive: fallback to single speaker if needed ──
+    if (speakerEntries.length === 0) {
+        console.warn('No speakers detected, falling back to single-speaker mode');
+        return generateSingle(apiKey, text, 'Zephyr', model, 'dialogue');
     }
 
-    const prompt = buildPrompt('dialogue', text);
+    if (speakerEntries.length === 1) {
+        console.warn('Only 1 speaker detected, falling back to single-speaker mode');
+        return generateSingle(apiKey, text, speakerEntries[0][1], model, 'monologue');
+    }
+
+    // ── Trim to max 2 speakers (API limit) ──
+    const activeSpeakers = speakerEntries.slice(0, 2);
+    let processedText = text;
+
+    if (speakerEntries.length > 2) {
+        console.warn(`${speakerEntries.length} speakers detected, remapping extras to first 2`);
+        // Remap extra speakers to the closest of the first 2
+        const [first, second] = activeSpeakers;
+        for (let i = 2; i < speakerEntries.length; i++) {
+            const extraName = speakerEntries[i][0];
+            // Alternate assignment to keep balance
+            const target = i % 2 === 0 ? first[0] : second[0];
+            processedText = processedText.replace(
+                new RegExp(`^${extraName}:`, 'gm'),
+                `${target}:`
+            );
+        }
+    }
+
+    const prompt = buildPrompt('dialogue', processedText);
 
     return withRetry(async () => {
         const response = await ai.models.generateContent({
@@ -107,7 +148,7 @@ export async function generateMulti(apiKey, text, speakers, model = 'gemini-2.5-
                 responseModalities: ['AUDIO'],
                 speechConfig: {
                     multiSpeakerVoiceConfig: {
-                        speakerVoiceConfigs: speakerEntries.map(([speaker, voiceName]) => ({
+                        speakerVoiceConfigs: activeSpeakers.map(([speaker, voiceName]) => ({
                             speaker,
                             voiceConfig: {
                                 prebuiltVoiceConfig: { voiceName },
