@@ -74,18 +74,28 @@ function detectSpeakerGender(lines) {
 }
 
 /**
- * Calculate gapAfter for a narrator line.
- * Rule: if "回答X至Y小题" → (Y-X+1) × 5s
- * Otherwise: 2s default
+ * Extract question count from a narrator line.
+ * "回答1至3小题" → 3, "回答7至10小题" → 4
+ * Returns 0 if no question range found.
  */
-function calcNarratorGap(line) {
+function extractQuestionCount(line) {
     const qm = line.match(PATTERNS.questionRange);
     if (qm) {
         const from = parseInt(qm[1], 10);
         const to = parseInt(qm[2], 10);
-        return (to - from + 1) * 5;
+        return to - from + 1;
     }
-    return 2;
+    return 0;
+}
+
+/**
+ * Calculate gapAfter for a narrator line (reading time before content).
+ * Rule: if "回答X至Y小题" → (Y-X+1) × 5s
+ * Otherwise: 2s default
+ */
+function calcNarratorGap(line) {
+    const count = extractQuestionCount(line);
+    return count > 0 ? count * 5 : 2;
 }
 
 let _nextId = 0;
@@ -97,6 +107,7 @@ function parseToSegments(lines) {
     _nextId = 0;
     const segments = [];
     let dialogueBuf = [];
+    let lastQuestionCount = 0; // track question count from preceding narrator
 
     function flushDialogue() {
         if (dialogueBuf.length === 0) return;
@@ -104,6 +115,9 @@ function parseToSegments(lines) {
         const normalizedText = normalizeDialogueText(rawText);
         const genders = detectSpeakerGender(dialogueBuf);
         const isMono = genders.length <= 1;
+
+        // Answering time after content = questions × 5s
+        const answerGap = lastQuestionCount > 0 ? lastQuestionCount * 5 : 5;
 
         // ding before each content block
         segments.push({
@@ -116,14 +130,14 @@ function parseToSegments(lines) {
             const voice = gender === 'male' ? 'Charon' : 'Zephyr';
             segments.push({
                 id: makeId(), type: 'monologue', text: normalizedText,
-                repeat: 2, gapAfter: 5,
+                repeat: 2, gapAfter: answerGap,
                 speakerConfig: { mode: 'single', voices: { narrator: voice } },
                 monologueGender: gender,
             });
         } else {
             segments.push({
                 id: makeId(), type: 'dialogue', text: normalizedText,
-                repeat: 2, gapAfter: 5,
+                repeat: 2, gapAfter: answerGap,
                 speakerConfig: {
                     mode: 'multi',
                     voices: { Sarah: 'Zephyr', James: 'Charon' },
@@ -141,6 +155,10 @@ function parseToSegments(lines) {
         if (dialogueBuf.length > 0) flushDialogue();
 
         if (PATTERNS.chineseNarrator.test(line)) {
+            // Track question count for the upcoming content segment
+            const qCount = extractQuestionCount(line);
+            if (qCount > 0) lastQuestionCount = qCount;
+
             const gapAfter = calcNarratorGap(line);
             segments.push({
                 id: makeId(), type: 'narrator', text: line,
@@ -152,9 +170,10 @@ function parseToSegments(lines) {
 
         // Orphan English text (shouldn't happen after mergeWrappedLines, but just in case)
         if (line.length >= 10 && /[a-zA-Z]/.test(line)) {
+            const answerGap = lastQuestionCount > 0 ? lastQuestionCount * 5 : 5;
             segments.push({
                 id: makeId(), type: 'monologue', text: line,
-                repeat: 2, gapAfter: 5,
+                repeat: 2, gapAfter: answerGap,
                 speakerConfig: { mode: 'single', voices: { narrator: 'Zephyr' } },
                 monologueGender: 'female',
             });
