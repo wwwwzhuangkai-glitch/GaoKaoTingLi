@@ -179,7 +179,26 @@ function parseToSegments(lines) {
             });
         }
     }
+    // Flush any remaining dialogue
     flushDialogue();
+
+    // ── Post-processing: fix intro narrator if it mentions 独白 but no monologue exists ──
+    const hasMonologue = segments.some(s => s.type === 'monologue');
+    const hasDialogue = segments.some(s => s.type === 'dialogue');
+    for (const seg of segments) {
+        if (seg.type !== 'narrator') continue;
+        // Fix intro: "对话或独白" → "对话" when no monologue
+        if (!hasMonologue && hasDialogue && seg.text.includes('对话或独白')) {
+            seg.text = seg.text.replace(/对话或独白/g, '对话');
+            seg._fixed = 'removed 独白 (no monologue in content)';
+        }
+        // Fix intro: "每段对话或独白" → "每段对话" when no monologue
+        if (!hasMonologue && hasDialogue && seg.text.includes('或独白')) {
+            seg.text = seg.text.replace(/或独白/g, '');
+            seg._fixed = 'removed 或独白 (no monologue in content)';
+        }
+    }
+
     return segments;
 }
 
@@ -214,8 +233,9 @@ async function main() {
         for (const seg of segments) {
             const icon = { ding: '🔔', narrator: '🎙️', dialogue: '💬', monologue: '📢' }[seg.type];
             const extra = seg.type === 'monologue' ? ` [${seg.monologueGender}]` : '';
+            const fixed = seg._fixed ? ' 🔧 FIXED' : '';
             const textPreview = seg.text.substring(0, 60).replace(/\n/g, ' ');
-            console.log(`   ${icon} ${seg.id} ${seg.type}${extra} ×${seg.repeat} gap=${seg.gapAfter}s | ${textPreview}`);
+            console.log(`   ${icon} ${seg.id} ${seg.type}${extra} ×${seg.repeat} gap=${seg.gapAfter}s${fixed} | ${textPreview}`);
         }
         console.log();
     }
